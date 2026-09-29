@@ -1,0 +1,12 @@
+# PyTorch использует MPS на Apple Silicon, если backend доступен.
+torch>=2.8.0
+torchvision>=0.23.0
+torchaudio>=2.8.0
+numpy>=1.26.0
+
+# Распознавание речи.
+openai-whisper>=20240930
+
+# Обработка медиа и progress bar.
+ffmpeg-python>=0.2.0
+tqdm>=4.66.0

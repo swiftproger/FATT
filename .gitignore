@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store
+
+# Local media inputs and temporary exports
+*.mp3
+*.wav
+*.m4a
+*.flac
+*.aac
+*.aif
+*.aiff
+*.alac
+*.amr
+*.caf
+*.mid
+*.midi
+*.ogg
+*.oga
+*.opus
+*.wma
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.webm
+*.mpeg
+*.mpg
+*.m4v
+*.3gp
+*.ts
+*.mts
+*.m2ts
+*.flv
+*.wmv
+*.vob
+*.ogv
+*.mxf
+*.asf
+*.rm
+*.rmvb
+
+# Local model/cache directories
+.cache/
+models/
