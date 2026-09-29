@@ -37,43 +37,68 @@ def _read_wav_samples(audio_path: Path) -> tuple[Any, int]:
     return samples, sample_rate
 
 
-def _audio_feature(samples: Any, sample_rate: int) -> Any:
-    """Строит нормализованный спектральный вектор признаков для аудиофрагмента."""
-    import numpy as np
+class AcousticFeatureExtractor:
+    """Кэширует параметры FFT и быстро строит признаки голоса для окон."""
 
-    frame_length = int(sample_rate * 0.025)
-    hop_length = int(sample_rate * 0.010)
-    if len(samples) < frame_length:
-        samples = np.pad(samples, (0, frame_length - len(samples)))
-    frames = np.lib.stride_tricks.sliding_window_view(samples, frame_length)[::hop_length]
-    window = np.hanning(frame_length).astype(np.float32)
-    spectrum = np.abs(np.fft.rfft(frames * window, axis=1)) ** 2
-    frequencies = np.fft.rfftfreq(frame_length, 1.0 / sample_rate)
+    def __init__(self, sample_rate: int) -> None:
+        """Подготавливает FFT-окно и полосы частот для заданной частоты дискретизации."""
+        import numpy as np
 
-    edges = np.geomspace(80.0, 7600.0, 25)
-    band_means = []
-    for low, high in zip(edges[:-1], edges[1:]):
-        band = spectrum[:, (frequencies >= low) & (frequencies < high)]
-        if band.size:
-            band_means.append(np.log1p(band.mean(axis=1)))
-        else:
-            # Узкая низкочастотная полоса может не содержать ни одного FFT-бина.
-            band_means.append(np.zeros(spectrum.shape[0], dtype=np.float32))
-    band_features = np.stack(band_means, axis=1)
-    spectral_centroid = (
-        (spectrum * frequencies).sum(axis=1) / (spectrum.sum(axis=1) + 1e-8)
-    )
-    zero_crossing_rate = (frames[:, 1:] * frames[:, :-1] < 0).mean(axis=1)
-    feature = np.concatenate(
-        [
-            band_features.mean(axis=0),
-            band_features.std(axis=0),
-            [spectral_centroid.mean() / sample_rate, spectral_centroid.std() / sample_rate],
-            [zero_crossing_rate.mean(), zero_crossing_rate.std()],
+        self._np = np
+        self._sample_rate = sample_rate
+        self._frame_length = int(sample_rate * 0.025)
+        self._hop_length = int(sample_rate * 0.010)
+        self._window = np.hanning(self._frame_length).astype(np.float32)
+        self._frequencies = np.fft.rfftfreq(
+            self._frame_length, 1.0 / sample_rate
+        )
+        edges = np.geomspace(80.0, 7600.0, 25)
+        self._band_masks = [
+            (self._frequencies >= low) & (self._frequencies < high)
+            for low, high in zip(edges[:-1], edges[1:])
         ]
-    ).astype(np.float32)
-    norm = np.linalg.norm(feature)
-    return feature / norm if norm > 0 else feature
+
+    def extract(self, samples: Any) -> Any:
+        """Строит нормализованный спектральный вектор для одного аудиоокна."""
+        np = self._np
+        if len(samples) < self._frame_length:
+            samples = np.pad(samples, (0, self._frame_length - len(samples)))
+        frames = np.lib.stride_tricks.sliding_window_view(
+            samples, self._frame_length
+        )[:: self._hop_length]
+        spectrum = np.abs(np.fft.rfft(frames * self._window, axis=1)) ** 2
+        band_means = []
+        for mask in self._band_masks:
+            band = spectrum[:, mask]
+            if band.size:
+                band_means.append(np.log1p(band.mean(axis=1)))
+            else:
+                # Узкая низкочастотная полоса может не содержать FFT-бинов.
+                band_means.append(np.zeros(spectrum.shape[0], dtype=np.float32))
+        band_features = np.stack(band_means, axis=1)
+        spectral_centroid = (
+            (spectrum * self._frequencies).sum(axis=1)
+            / (spectrum.sum(axis=1) + 1e-8)
+        )
+        zero_crossing_rate = (frames[:, 1:] * frames[:, :-1] < 0).mean(axis=1)
+        feature = np.concatenate(
+            [
+                band_features.mean(axis=0),
+                band_features.std(axis=0),
+                [
+                    spectral_centroid.mean() / self._sample_rate,
+                    spectral_centroid.std() / self._sample_rate,
+                ],
+                [zero_crossing_rate.mean(), zero_crossing_rate.std()],
+            ]
+        ).astype(np.float32)
+        norm = np.linalg.norm(feature)
+        return feature / norm if norm > 0 else feature
+
+
+def _audio_feature(samples: Any, sample_rate: int) -> Any:
+    """Строит признаки одного окна через оптимизированный экстрактор."""
+    return AcousticFeatureExtractor(sample_rate).extract(samples)
 
 
 def _cluster_features(features: Sequence[Any], num_speakers: int | None) -> list[int]:
@@ -104,7 +129,7 @@ def _cluster_features(features: Sequence[Any], num_speakers: int | None) -> list
             )
             norms = np.linalg.norm(updated, axis=1, keepdims=True)
             updated = updated / np.maximum(norms, 1e-8)
-            if np.array_equal(updated, centers):
+            if np.allclose(updated, centers, rtol=1e-4, atol=1e-5):
                 break
             centers = updated
         return labels.tolist()
@@ -148,10 +173,12 @@ def diarize_audio(
 
     samples, sample_rate = _read_wav_samples(audio_path)
     window_length = int(sample_rate * 1.5)
+    hop_length = int(sample_rate * 1.0)
+    feature_extractor = AcousticFeatureExtractor(sample_rate)
     windows: list[tuple[float, float, Any]] = []
     energies: list[float] = []
     chunks: list[tuple[int, Any]] = []
-    for start in range(0, len(samples), window_length):
+    for start in range(0, len(samples), hop_length):
         chunk = samples[start : start + window_length]
         if len(chunk) < sample_rate * 0.5:
             continue
@@ -167,7 +194,7 @@ def diarize_audio(
     for (start, chunk), energy in zip(chunks, energies):
         if energy < threshold:
             continue
-        features = _audio_feature(chunk, sample_rate)
+        features = feature_extractor.extract(chunk)
         windows.append(
             (
                 start / sample_rate,
@@ -179,12 +206,30 @@ def diarize_audio(
         raise FattError("В аудио не обнаружена речь для локальной диаризации")
 
     labels = _cluster_features([item[2] for item in windows], num_speakers)
+    labels = _smooth_labels(labels)
     segments: list[SpeakerSegment] = []
-    for (start, end, _), label in zip(windows, labels):
+    for index, ((start, end, _), label) in enumerate(zip(windows, labels)):
         speaker = f"LOCAL_{label:02d}"
-        if segments and segments[-1].label == speaker and start <= segments[-1].end + 0.1:
+        segment_start = start if index == 0 else (windows[index - 1][0] + start) / 2
+        segment_end = (
+            end
+            if index == len(windows) - 1
+            else (start + windows[index + 1][0]) / 2
+        )
+        if segments and segments[-1].label == speaker:
             previous = segments[-1]
-            segments[-1] = SpeakerSegment(previous.start, max(previous.end, end), speaker)
+            segments[-1] = SpeakerSegment(previous.start, segment_end, speaker)
         else:
-            segments.append(SpeakerSegment(start, end, speaker))
+            segments.append(SpeakerSegment(segment_start, segment_end, speaker))
     return segments
+
+
+def _smooth_labels(labels: Sequence[int]) -> list[int]:
+    """Убирает одиночные скачки метки между двумя одинаковыми спикерами."""
+    if len(labels) < 3:
+        return list(labels)
+    smoothed = list(labels)
+    for index in range(1, len(labels) - 1):
+        if labels[index - 1] == labels[index + 1] != labels[index]:
+            smoothed[index] = labels[index - 1]
+    return smoothed

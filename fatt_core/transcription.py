@@ -9,24 +9,53 @@ from .errors import FattError
 from .models import SpeakerSegment, TranscriptSegment
 
 
+class WhisperTranscriber:
+    """Загружает модель Whisper один раз и повторно использует её для файлов."""
+
+    def __init__(
+        self,
+        model_name: str,
+        device: str,
+        language: str | None = None,
+    ) -> None:
+        """Загружает выбранную модель Whisper на указанное устройство."""
+        try:
+            import whisper
+        except ImportError as exc:
+            raise FattError(
+                "openai-whisper не установлен. Установите зависимости из README.md."
+            ) from exc
+        try:
+            self._model = whisper.load_model(model_name, device=device)
+        except Exception as exc:
+            raise FattError(f"Не удалось загрузить модель Whisper: {exc}") from exc
+        self._device = device
+        self._language = language
+
+    def transcribe(self, audio_path: Path) -> list[dict[str, Any]]:
+        """Транскрибирует один WAV-файл и возвращает сегменты с таймкодами."""
+        options: dict[str, Any] = {
+            "fp16": self._device == "mps",
+            "verbose": False,
+            "temperature": 0,
+        }
+        if self._language:
+            options["language"] = self._language
+        try:
+            result = self._model.transcribe(str(audio_path), **options)
+        except Exception as exc:
+            raise FattError(f"Ошибка транскрибации Whisper: {exc}") from exc
+        return list(result.get("segments", []))
+
+
 def transcribe_audio(
-    audio_path: Path, model_name: str, device: str
+    audio_path: Path,
+    model_name: str,
+    device: str,
+    language: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Запускает локальный OpenAI Whisper и возвращает его исходные сегменты с таймкодами."""
-    try:
-        import whisper
-    except ImportError as exc:
-        raise FattError(
-            "openai-whisper не установлен. Установите зависимости из README.md."
-        ) from exc
-    try:
-        model = whisper.load_model(model_name, device=device)
-        result = model.transcribe(
-            str(audio_path), fp16=device == "mps", verbose=False
-        )
-    except Exception as exc:
-        raise FattError(f"Ошибка транскрибации Whisper: {exc}") from exc
-    return list(result.get("segments", []))
+    """Транскрибирует один файл через временный экземпляр Whisper."""
+    return WhisperTranscriber(model_name, device, language).transcribe(audio_path)
 
 
 def _overlap(

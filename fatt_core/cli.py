@@ -14,6 +14,7 @@ from .media import SUPPORTED_EXTENSIONS, check_ffmpeg, validate_input
 from .models import ProcessingJob, ProcessingReport
 from .pipeline import process_file
 from .report import print_report
+from .transcription import WhisperTranscriber
 
 
 MODEL_CHOICES = ("tiny", "base", "small", "medium", "large-v3")
@@ -61,6 +62,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--speakers",
         type=positive_int,
         help="известное количество спикеров (необязательно)",
+    )
+    parser.add_argument(
+        "--language",
+        help="язык речи, например ru или en; ускоряет и улучшает распознавание",
     )
     return parser
 
@@ -184,6 +189,8 @@ def run(args: argparse.Namespace, interactive: bool = False) -> list[ProcessingR
     check_ffmpeg()
     device = get_torch_device()
     print(f"Устройство: {device}", file=sys.stderr)
+    print(f"Загрузка модели Whisper: {args.model}", file=sys.stderr)
+    transcriber = WhisperTranscriber(args.model, device, args.language)
     reports: list[ProcessingReport] = []
     started_at = time.perf_counter()
     for index, job in enumerate(jobs, start=1):
@@ -195,6 +202,8 @@ def run(args: argparse.Namespace, interactive: bool = False) -> list[ProcessingR
                 device=device,
                 num_speakers=args.speakers,
                 progress_description=f"FATT {index}/{len(jobs)}",
+                transcriber=transcriber,
+                language=args.language,
             )
         )
     print_report(reports, time.perf_counter() - started_at)

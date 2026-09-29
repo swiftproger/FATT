@@ -12,7 +12,7 @@ from .media import extract_audio, resolve_output_path, validate_input
 from .models import ProcessingReport
 from .output import write_transcript
 from .progress import make_progress
-from .transcription import combine_transcript_and_speakers, transcribe_audio
+from .transcription import WhisperTranscriber, combine_transcript_and_speakers
 
 
 def process_file(
@@ -22,6 +22,8 @@ def process_file(
     device: str,
     num_speakers: int | None = None,
     progress_description: str = "FATT",
+    transcriber: WhisperTranscriber | None = None,
+    language: str | None = None,
 ) -> ProcessingReport:
     """Обрабатывает один файл и возвращает успешный или ошибочный отчёт."""
     started_at = time.perf_counter()
@@ -45,7 +47,10 @@ def process_file(
             progress.update(1)
 
             progress.set_postfix_str("[3/3] Транскрибация Whisper")
-            raw_transcript = transcribe_audio(audio_path, model_name, device)
+            active_transcriber = transcriber or WhisperTranscriber(
+                model_name, device, language
+            )
+            raw_transcript = active_transcriber.transcribe(audio_path)
             transcript = combine_transcript_and_speakers(raw_transcript, diarization)
             progress.update(1)
         write_transcript(output_path, transcript)
