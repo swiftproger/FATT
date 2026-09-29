@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+import warnings
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -25,10 +27,14 @@ class WhisperTranscriber:
             raise FattError(
                 "openai-whisper не установлен. Установите зависимости из README.md."
             ) from exc
+        captured_warnings: list[warnings.WarningMessage] = []
         try:
-            self._model = whisper.load_model(model_name, device=device)
+            with warnings.catch_warnings(record=True) as captured_warnings:
+                warnings.simplefilter("always")
+                self._model = whisper.load_model(model_name, device=device)
         except Exception as exc:
             raise FattError(f"Не удалось загрузить модель Whisper: {exc}") from exc
+        _print_whisper_warnings(captured_warnings)
         self._device = device
         self._language = language
 
@@ -46,6 +52,20 @@ class WhisperTranscriber:
         except Exception as exc:
             raise FattError(f"Ошибка транскрибации Whisper: {exc}") from exc
         return list(result.get("segments", []))
+
+
+def _print_whisper_warnings(
+    captured_warnings: Sequence[warnings.WarningMessage],
+) -> None:
+    """Печатает предупреждения Whisper в коротком понятном виде."""
+    for warning in captured_warnings:
+        message = str(warning.message)
+        if "checksum does not match" in message.lower():
+            message = (
+                "Кэш модели повреждён или загружен не полностью. "
+                "Whisper автоматически скачал модель заново."
+            )
+        print(f"Предупреждение Whisper: {message}", file=sys.stderr)
 
 
 def transcribe_audio(

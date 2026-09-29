@@ -17,22 +17,29 @@ def format_elapsed(seconds: float) -> str:
 
 def print_report(reports: Sequence[ProcessingReport], total_seconds: float) -> None:
     """Печатает отчёт по каждому файлу и общие итоги пакетного запуска."""
-    print("\nОтчёт о выполнении")
-    print("=" * 72)
-    for report in reports:
-        status = "УСПЕШНО" if report.success else "ОШИБКА"
-        print(f"{status}: {report.input_path}")
-        print(f"  Время обработки: {format_elapsed(report.elapsed_seconds)}")
-        print(f"  Слов: {report.word_count}")
+    separator = "=" * 72
+    print(f"\n\n{separator}")
+    print("ОТЧЁТ О ВЫПОЛНЕНИИ")
+    print(separator)
+    for index, report in enumerate(reports, start=1):
+        print(f"\nФАЙЛ {index} ИЗ {len(reports)}")
+        print("-" * 72)
+        print(f"Статус: {'УСПЕШНО' if report.success else 'ОШИБКА'}")
+        print(f"Вход: {report.input_path}")
+        print(f"Время обработки: {format_elapsed(report.elapsed_seconds)}")
+        print(f"Количество слов: {report.word_count}")
         if report.output_path is not None:
-            print(f"  Результат: {report.output_path}")
+            print(f"Результат: {report.output_path}")
         if report.error:
-            print(f"  Причина: {report.error}")
+            print(f"Причина: {report.error}")
     successful = sum(report.success for report in reports)
     failed = len(reports) - successful
     total_words = sum(report.word_count for report in reports)
-    print("-" * 72)
+    print(f"\n{separator}")
+    print("ИТОГИ")
+    print(separator)
     print(f"Файлов обработано: {len(reports)}")
-    print(f"Успешно: {successful}; с ошибками: {failed}")
+    print(f"Успешно: {successful}")
+    print(f"С ошибками: {failed}")
     print(f"Всего слов: {total_words}")
     print(f"Общее время: {format_elapsed(total_seconds)}")

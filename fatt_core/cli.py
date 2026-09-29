@@ -19,6 +19,8 @@ from .transcription import WhisperTranscriber
 
 MODEL_CHOICES = ("tiny", "base", "small", "medium", "large-v3")
 DEFAULT_MODEL = "small"
+LANGUAGE_CHOICES = ("ru", "en", "auto")
+DEFAULT_LANGUAGE = "ru"
 
 
 def positive_int(value: str) -> int:
@@ -70,8 +72,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _read_path(prompt: str) -> Path:
-    """Запрашивает путь с поддержкой стрелок и преобразует его в объект Path."""
+def _prompt_text(prompt: str) -> str:
+    """Запрашивает строку через терминальный редактор с поддержкой стрелок."""
     try:
         from prompt_toolkit import prompt as terminal_prompt
     except ImportError as exc:
@@ -80,11 +82,16 @@ def _read_path(prompt: str) -> Path:
             "requirements.txt."
         ) from exc
     try:
-        value = terminal_prompt(prompt).strip()
+        return terminal_prompt(prompt).strip()
     except EOFError as exc:
         raise FattError("Ввод был прерван до указания пути") from exc
     except KeyboardInterrupt as exc:
         raise FattError("Ввод пути прерван пользователем") from exc
+
+
+def _read_path(prompt: str) -> Path:
+    """Запрашивает путь с поддержкой стрелок и преобразует его в объект Path."""
+    value = _prompt_text(prompt)
     if not value:
         raise FattError("Путь не может быть пустым")
     return parse_user_path(value)
@@ -93,22 +100,49 @@ def _read_path(prompt: str) -> Path:
 def parse_user_path(value: str) -> Path:
     """Убирает внешние кавычки, сохраняя пробелы, решётки и другие символы."""
     value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-        value = value[1:-1]
+    if value[:1] in {"'", '"'}:
+        value = value[1:]
+    if value[-1:] in {"'", '"'}:
+        value = value[:-1]
     return Path(value).expanduser()
 
 
-def interactive_wizard(default_output: Path | None = None) -> tuple[Path, Path]:
-    """Проводит интерактивный мастер выбора источника и папки результатов."""
+def _read_choice(prompt: str, choices: Sequence[str], default: str) -> str:
+    """Показывает варианты выбора и возвращает выбранное или стандартное значение."""
+    numbered_choices = ", ".join(
+        f"{index + 1}) {choice}" for index, choice in enumerate(choices)
+    )
+    print(f"{prompt}: {numbered_choices}")
+    while True:
+        value = _prompt_text(f"Выбор [{default}]: ").lower()
+        if not value:
+            return default
+        if value.isdigit() and 1 <= int(value) <= len(choices):
+            return choices[int(value) - 1]
+        if value in choices:
+            return value
+        print("Введите номер или одно из значений: " + ", ".join(choices))
+
+
+def interactive_wizard(
+    default_output: Path | None = None,
+    default_model: str = DEFAULT_MODEL,
+    default_language: str = DEFAULT_LANGUAGE,
+) -> tuple[Path, Path, str, str | None]:
+    """Проводит мастер выбора модели, языка, источника и папки результатов."""
     print("FATT — мастер запуска")
+    model = _read_choice("1. Модель Whisper", MODEL_CHOICES, default_model)
+    language = _read_choice(
+        "2. Язык речи", LANGUAGE_CHOICES, default_language
+    )
     print("Укажите аудиофайл, видеофайл или папку с ними.")
-    source = _read_path("1. Файл или папка: ")
+    source = _read_path("3. Файл или папка: ")
     if default_output is None:
-        output = _read_path("2. Папка для сохранения результатов: ")
+        output = _read_path("4. Папка для сохранения результатов: ")
     else:
         output = default_output
-        print(f"2. Папка для сохранения результатов: {output}")
-    return source, output
+        print(f"4. Папка для сохранения результатов: {output}")
+    return source, output, model, None if language == "auto" else language
 
 
 def discover_input_files(source: Path) -> list[Path]:
@@ -182,30 +216,41 @@ def run(args: argparse.Namespace, interactive: bool = False) -> list[ProcessingR
     """Запускает последовательную обработку всех файлов и печатает отчёт."""
     source = args.input
     output = args.output
+    model_name = args.model
+    language = args.language
     if source is None:
-        source, output = interactive_wizard(output)
+        source, output, model_name, language = interactive_wizard(
+            output,
+            default_model=args.model,
+            default_language=args.language or DEFAULT_LANGUAGE,
+        )
         interactive = True
     jobs = build_jobs(source, output, interactive=interactive)
     check_ffmpeg()
     device = get_torch_device()
     print(f"Устройство: {device}", file=sys.stderr)
-    print(f"Загрузка модели Whisper: {args.model}", file=sys.stderr)
-    transcriber = WhisperTranscriber(args.model, device, args.language)
+    print(f"Загрузка модели Whisper: {model_name}", file=sys.stderr)
+    transcriber = WhisperTranscriber(model_name, device, language)
     reports: list[ProcessingReport] = []
     started_at = time.perf_counter()
     for index, job in enumerate(jobs, start=1):
+        print(
+            f"\nОбработка файла {index} из {len(jobs)}: {job.input_path}",
+            file=sys.stderr,
+        )
         reports.append(
             process_file(
                 input_path=job.input_path,
                 output_path=job.output_path,
-                model_name=args.model,
+                model_name=model_name,
                 device=device,
                 num_speakers=args.speakers,
                 progress_description=f"FATT {index}/{len(jobs)}",
                 transcriber=transcriber,
-                language=args.language,
+                language=language,
             )
         )
+        print("", file=sys.stderr)
     print_report(reports, time.perf_counter() - started_at)
     return reports
 
