@@ -10,3 +10,4 @@ openai-whisper>=20240930
 # Обработка медиа и progress bar.
 ffmpeg-python>=0.2.0
 tqdm>=4.66.0
+prompt-toolkit>=3.0.0

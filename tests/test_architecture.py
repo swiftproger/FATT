@@ -25,7 +25,9 @@ class TestArchitecture(unittest.TestCase):
             "media.py",
             "models.py",
             "output.py",
+            "pipeline.py",
             "progress.py",
+            "report.py",
             "transcription.py",
         }
         actual_modules = {path.name for path in CORE_ROOT.glob("*.py")}
