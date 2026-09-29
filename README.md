@@ -22,6 +22,33 @@
 - ускорение PyTorch через Apple Metal (`MPS`) на Mac с Apple Silicon;
 - индикатор прогресса по трём этапам обработки.
 
+## Структура проекта
+
+Корневой `fatt.py` — только тонкая точка входа. Основная логика разделена по
+модулям в `fatt_core/`:
+
+```text
+fatt.py                    CLI entry point
+fatt_core/
+├── cli.py                 аргументы и orchestration pipeline
+├── device.py              выбор MPS/CPU
+├── media.py               валидация и FFmpeg
+├── diarization.py         локальная диаризация
+├── transcription.py       Whisper и объединение таймлайнов
+├── output.py              форматирование и запись результата
+├── progress.py            progress bar
+├── models.py              dataclass-модели сегментов
+└── errors.py              доменное исключение FATT
+tests/test_architecture.py архитектурные проверки
+```
+
+Все классы и функции производственного кода имеют русскоязычный docstring. Это
+правило проверяется автоматически:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
 ## Установка на Mac с M4
 
 ### Шаг 1. Установите FFmpeg
