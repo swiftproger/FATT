@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sys
+import threading
+import time
 import warnings
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -42,15 +44,26 @@ class WhisperTranscriber:
         """Транскрибирует один WAV-файл и возвращает сегменты с таймкодами."""
         options: dict[str, Any] = {
             "fp16": self._device == "mps",
-            "verbose": False,
+            "verbose": None,
             "temperature": 0,
         }
         if self._language:
             options["language"] = self._language
+        stop_heartbeat = threading.Event()
+        started_at = time.perf_counter()
+        heartbeat = threading.Thread(
+            target=_print_transcription_heartbeat,
+            args=(stop_heartbeat, started_at),
+            daemon=True,
+        )
+        heartbeat.start()
         try:
             result = self._model.transcribe(str(audio_path), **options)
         except Exception as exc:
             raise FattError(f"Ошибка транскрибации Whisper: {exc}") from exc
+        finally:
+            stop_heartbeat.set()
+            heartbeat.join()
         return list(result.get("segments", []))
 
 
@@ -66,6 +79,30 @@ def _print_whisper_warnings(
                 "Whisper автоматически скачал модель заново."
             )
         print(f"Предупреждение Whisper: {message}", file=sys.stderr)
+
+
+def _print_transcription_heartbeat(
+    stop_event: threading.Event,
+    started_at: float,
+    interval: float = 30.0,
+) -> None:
+    """Периодически сообщает, что длительная транскрибация ещё выполняется."""
+    while not stop_event.wait(interval):
+        elapsed = time.perf_counter() - started_at
+        print(
+            "  Whisper всё ещё работает; прошло "
+            f"{_format_elapsed(elapsed)}...",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
+def _format_elapsed(seconds: float) -> str:
+    """Форматирует длительность работы Whisper для сообщения в консоли."""
+    if seconds < 60:
+        return f"{seconds:.0f} с"
+    minutes, remainder = divmod(seconds, 60)
+    return f"{int(minutes)} мин {remainder:.0f} с"
 
 
 def transcribe_audio(

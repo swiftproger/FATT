@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Sequence
 
-from .device import get_torch_device
+from .device import DeviceInfo, get_device_info
 from .errors import FattError
 from .media import SUPPORTED_EXTENSIONS, check_ffmpeg, validate_input
 from .models import ProcessingJob, ProcessingReport
@@ -21,6 +21,18 @@ MODEL_CHOICES = ("tiny", "base", "small", "medium", "large-v3")
 DEFAULT_MODEL = "small"
 LANGUAGE_CHOICES = ("ru", "en", "auto")
 DEFAULT_LANGUAGE = "ru"
+MODEL_DESCRIPTIONS = {
+    "tiny": "самая быстрая, базовое качество",
+    "base": "быстрая, среднее качество",
+    "small": "баланс скорости и качества",
+    "medium": "высокое качество, заметно медленнее",
+    "large-v3": "максимальное качество, требует больше памяти",
+}
+LANGUAGE_LABELS = {
+    "ru": "русский",
+    "en": "английский",
+    "auto": "автоопределение",
+}
 
 
 def positive_int(value: str) -> int:
@@ -212,6 +224,58 @@ def build_jobs(
     return jobs
 
 
+def _print_run_configuration(
+    source: Path,
+    output: Path | None,
+    jobs: Sequence[ProcessingJob],
+    model_name: str,
+    language: str | None,
+    speakers: int | None,
+    device_info: DeviceInfo,
+) -> None:
+    """Печатает все основные параметры запуска понятным отдельным блоком."""
+    language_key = language or "auto"
+    language_label = LANGUAGE_LABELS.get(language_key, language_key)
+    model_description = MODEL_DESCRIPTIONS.get(model_name, "пользовательская модель")
+    if output is None:
+        source_path = source.expanduser().resolve()
+        if source_path.is_dir():
+            output_label = source_path.parent / f"{source_path.name}_transcripts"
+        else:
+            output_label = jobs[0].output_path
+    else:
+        output_label = output
+    speaker_label = (
+        f"{speakers} (задано вручную)"
+        if speakers is not None
+        else "автоматически"
+    )
+    print("\nПАРАМЕТРЫ ЗАПУСКА", file=sys.stderr)
+    print("  Вход:              " + str(source), file=sys.stderr)
+    print("  Результаты:        " + str(output_label), file=sys.stderr)
+    print(f"  Файлов:            {len(jobs)}", file=sys.stderr)
+    print(
+        f"  Модель Whisper:    {model_name} — {model_description}",
+        file=sys.stderr,
+    )
+    print(
+        f"  Язык речи:         {language_label} ({language_key})",
+        file=sys.stderr,
+    )
+    print(f"  Спикеры:           {speaker_label}", file=sys.stderr)
+    print(f"  Устройство:        {device_info.label}", file=sys.stderr)
+    print(f"  Точность:          {device_info.precision}", file=sys.stderr)
+    print(f"  PyTorch:           {device_info.torch_version}", file=sys.stderr)
+    print(f"  Python:            {device_info.python_version}", file=sys.stderr)
+    print(f"  MPS:               {device_info.mps_status}", file=sys.stderr)
+    print(f"  Диагностика:       {device_info.reason}", file=sys.stderr)
+    print(
+        "  Whisper:            температура 0, без вложенного progress-бара",
+        file=sys.stderr,
+    )
+    print("", file=sys.stderr, flush=True)
+
+
 def run(args: argparse.Namespace, interactive: bool = False) -> list[ProcessingReport]:
     """Запускает последовательную обработку всех файлов и печатает отчёт."""
     source = args.input
@@ -227,10 +291,29 @@ def run(args: argparse.Namespace, interactive: bool = False) -> list[ProcessingR
         interactive = True
     jobs = build_jobs(source, output, interactive=interactive)
     check_ffmpeg()
-    device = get_torch_device()
-    print(f"Устройство: {device}", file=sys.stderr)
-    print(f"Загрузка модели Whisper: {model_name}", file=sys.stderr)
+    device_info = get_device_info()
+    device = device_info.name
+    _print_run_configuration(
+        source=source,
+        output=output,
+        jobs=jobs,
+        model_name=model_name,
+        language=language,
+        speakers=args.speakers,
+        device_info=device_info,
+    )
+    print(
+        f"Загрузка модели Whisper '{model_name}' на устройстве "
+        f"'{device_info.label}'...",
+        file=sys.stderr,
+        flush=True,
+    )
     transcriber = WhisperTranscriber(model_name, device, language)
+    print(
+        "Модель Whisper загружена. Начинаю обработку файлов.",
+        file=sys.stderr,
+        flush=True,
+    )
     reports: list[ProcessingReport] = []
     started_at = time.perf_counter()
     for index, job in enumerate(jobs, start=1):

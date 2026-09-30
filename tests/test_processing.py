@@ -43,6 +43,7 @@ class TestWhisperTranscriber(unittest.TestCase):
         self.assertEqual(len(transcribe_calls), 2)
         self.assertTrue(all(call["language"] == "ru" for call in transcribe_calls))
         self.assertTrue(all(call["fp16"] is True for call in transcribe_calls))
+        self.assertTrue(all(call["verbose"] is None for call in transcribe_calls))
 
 
 class TestInteractiveWizard(unittest.TestCase):
