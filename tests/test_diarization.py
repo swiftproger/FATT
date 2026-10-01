@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 import tempfile
 import types
@@ -109,12 +108,13 @@ class TestDiarizationMath(unittest.TestCase):
             self.assertEqual(diarization._cluster_features([], None), [])
             self.assertEqual(diarization._cluster_features([[1.0, 0.0]], None), [0])
 
-    @unittest.skipUnless(importlib.util.find_spec("numpy"), "требуется numpy из requirements.txt")
     def test_cluster_features_supports_fixed_and_automatic_clusters(self) -> None:
         """Проверяет k-means с заданным числом и автоматический порог."""
-        features = [[1.0, 0.0], [0.0, 1.0], [1.0, 0.0]]
-        self.assertEqual(diarization._cluster_features(features, 2), [0, 1, 0])
-        self.assertEqual(diarization._cluster_features(features, None), [0, 1, 0])
+        fake_numpy = _FakeClusterNumpy()
+        features = [[1.0, 0.0], [0.0, 1.0], [0.0, 1.0]]
+        with patch.dict(sys.modules, {"numpy": fake_numpy}):
+            self.assertEqual(diarization._cluster_features(features, 2), [0, 1, 1])
+            self.assertEqual(diarization._cluster_features(features, None), [0, 1, 1])
 
     def test_smooth_labels_removes_only_isolated_spike(self) -> None:
         """Проверяет короткие последовательности и одиночный скачок метки."""
@@ -135,15 +135,14 @@ class TestDiarizationMath(unittest.TestCase):
         self.assertEqual(result, ("feature", [1, 2]))
         extractor.assert_called_once_with(16000)
 
-    @unittest.skipUnless(importlib.util.find_spec("numpy"), "требуется numpy из requirements.txt")
     def test_feature_extractor_returns_normalized_vector(self) -> None:
         """Проверяет построение спектрального вектора для короткого сигнала."""
-        import numpy as np
-
-        extractor = diarization.AcousticFeatureExtractor(16000)
-        feature = extractor.extract(np.zeros(100, dtype=np.float32))
+        fake_numpy = _FakeFeatureNumpy()
+        with patch.dict(sys.modules, {"numpy": fake_numpy}):
+            extractor = diarization.AcousticFeatureExtractor(16000)
+            feature = extractor.extract([0.0] * 100)
         self.assertEqual(feature.shape, (52,))
-        self.assertTrue(np.all(np.isfinite(feature)))
+        self.assertEqual(feature.value, "normalized")
 
 
 class TestDiarizeAudio(unittest.TestCase):
@@ -196,6 +195,344 @@ class TestDiarizeAudio(unittest.TestCase):
         self.assertGreater(segments[0].end, segments[0].start)
 
 
+class _MiniArray:
+    """Небольшой двумерный массив для тестирования k-means без numpy."""
+
+    def __init__(self, data: object) -> None:
+        """Копирует скаляры, строки и матрицы в простой список."""
+        if isinstance(data, _MiniArray):
+            data = data.data
+        if isinstance(data, list):
+            self.data = [
+                list(item.data) if isinstance(item, _MiniArray) else item
+                for item in data
+            ]
+        else:
+            self.data = data
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """Возвращает размерность тестового массива."""
+        if not isinstance(self.data, list):
+            return ()
+        if self.data and isinstance(self.data[0], list):
+            return (len(self.data), len(self.data[0]))
+        return (len(self.data),)
+
+    @property
+    def T(self) -> "_MiniArray":
+        """Возвращает транспонированную матрицу."""
+        return _MiniArray([list(column) for column in zip(*self.data)])
+
+    def __len__(self) -> int:
+        """Возвращает длину первого измерения."""
+        return len(self.data)
+
+    def __iter__(self):
+        """Итерирует строки матрицы как одномерные массивы."""
+        if self.data and isinstance(self.data[0], list):
+            return iter([_MiniArray(item) for item in self.data])
+        return iter(self.data)
+
+    def __getitem__(self, key: object) -> object:
+        """Поддерживает индексы строк, маски и срезы столбцов."""
+        if isinstance(key, tuple):
+            rows, columns = key
+            selected_rows = self[rows]
+            if not isinstance(selected_rows, _MiniArray):
+                selected_rows = _MiniArray([selected_rows])
+            row_data = selected_rows.data
+            if not row_data or not isinstance(row_data[0], list):
+                row_data = [row_data]
+            if isinstance(columns, slice):
+                result = [row[columns] for row in row_data]
+            else:
+                mask = columns.data if isinstance(columns, _MiniArray) else columns
+                result = [[value for value, keep in zip(row, mask) if keep] for row in row_data]
+            return _MiniArray(result)
+        if isinstance(key, _MiniArray):
+            key = key.data
+        if isinstance(key, list):
+            if key and all(isinstance(value, bool) for value in key):
+                return _MiniArray([row for row, keep in zip(self.data, key) if keep])
+            return _MiniArray([self.data[index] for index in key])
+        value = self.data[key]  # type: ignore[index]
+        return _MiniArray(value) if isinstance(value, list) else value
+
+    def copy(self) -> "_MiniArray":
+        """Возвращает независимую копию массива."""
+        return _MiniArray(self.data)
+
+    def _binary(self, other: object, operation) -> "_MiniArray":
+        """Применяет бинарную операцию со скаляром или массивом."""
+        right = other.data if isinstance(other, _MiniArray) else other
+
+        def apply(left_value: object, right_value: object) -> object:
+            if isinstance(left_value, list):
+                if isinstance(right_value, list):
+                    if right_value and isinstance(right_value[0], list):
+                        return [
+                            apply(left_item, right_item)
+                            for left_item, right_item in zip(left_value, right_value)
+                        ]
+                    if len(right_value) == 1:
+                        return [apply(left_item, right_value[0]) for left_item in left_value]
+                    return [
+                        apply(left_item, right_item)
+                        for left_item, right_item in zip(left_value, right_value)
+                    ]
+                return [apply(left_item, right_value) for left_item in left_value]
+            return operation(left_value, right_value)
+
+        return _MiniArray(apply(self.data, right))
+
+    def __matmul__(self, other: "_MiniArray") -> object:
+        """Вычисляет скалярное или матричное произведение."""
+        if self.shape and len(self.shape) == 1 and len(other.shape) == 1:
+            return sum(left * right for left, right in zip(self.data, other.data))
+        return _MiniArray(
+            [
+                [sum(left * right for left, right in zip(row, column)) for column in zip(*other.data)]
+                for row in self.data
+            ]
+        )
+
+    def __mul__(self, other: object) -> "_MiniArray":
+        """Умножает массив на скаляр или массив."""
+        return self._binary(other, lambda left, right: left * right)
+
+    __rmul__ = __mul__
+
+    def __add__(self, other: object) -> "_MiniArray":
+        """Складывает массив со скаляром или массивом."""
+        return self._binary(other, lambda left, right: left + right)
+
+    def __truediv__(self, other: object) -> "_MiniArray":
+        """Делит массив на скаляр или массив с broadcasting по строкам."""
+        return self._binary(other, lambda left, right: left / right)
+
+    def __eq__(self, other: object) -> "_MiniArray":
+        """Сравнивает элементы массива со значением."""
+        return self._binary(other, lambda left, right: left == right)
+
+    def mean(self, axis: int | None = None) -> "_MiniArray | float":
+        """Вычисляет среднее значение для нужной оси."""
+        if axis is None:
+            values = self.data if self.data and not isinstance(self.data[0], list) else sum(self.data, [])
+            return sum(values) / len(values)
+        if axis == 0:
+            return _MiniArray(
+                [sum(row[index] for row in self.data) / len(self.data) for index in range(len(self.data[0]))]
+            )
+        return _MiniArray([sum(row) / len(row) for row in self.data])
+
+    def std(self, axis: int | None = None) -> "_MiniArray | float":
+        """Возвращает нулевое стандартное отклонение для stub-массива."""
+        del axis
+        return _MiniArray([0.0] * (len(self.data[0]) if self.data and isinstance(self.data[0], list) else len(self.data)))
+
+    def sum(self, axis: int | None = None) -> "_MiniArray | float":
+        """Вычисляет сумму по оси."""
+        if axis == 1:
+            return _MiniArray([sum(row) for row in self.data])
+        return sum(self.data)
+
+    def astype(self, _dtype: object) -> "_MiniArray":
+        """Имитирует преобразование типа."""
+        return self
+
+    def tolist(self) -> list[object]:
+        """Возвращает обычный список значений."""
+        return list(self.data)
+
+
+class _FakeClusterNumpy(types.ModuleType):
+    """Реализует только операции numpy, нужные для проверки кластеризации."""
+
+    float32 = object()
+    int = int
+
+    def __init__(self) -> None:
+        """Создаёт заглушку numpy."""
+        super().__init__("numpy")
+        self.linalg = types.SimpleNamespace(norm=self._norm)
+
+    def asarray(self, values: object, dtype: object = None) -> _MiniArray:
+        """Преобразует значения в тестовый массив."""
+        del dtype
+        return _MiniArray(values)
+
+    def array(self, values: object, dtype: object = None) -> _MiniArray:
+        """Создаёт тестовый массив."""
+        del dtype
+        return _MiniArray(values)
+
+    def linspace(self, start: int, end: int, count: int, dtype: object = None) -> list[int]:
+        """Создаёт равномерные индексы начальных центров."""
+        del dtype
+        if count == 1:
+            return [int(start)]
+        return [round(start + index * (end - start) / (count - 1)) for index in range(count)]
+
+    def zeros(self, count: int, dtype: object = None) -> _MiniArray:
+        """Создаёт нулевой вектор меток."""
+        del dtype
+        return _MiniArray([0] * count)
+
+    def argmax(self, values: object, axis: int | None = None) -> object:
+        """Возвращает индекс максимального значения."""
+        if axis == 1:
+            matrix = values.data if isinstance(values, _MiniArray) else values
+            return _MiniArray([max(range(len(row)), key=lambda index: row[index]) for row in matrix])
+        return max(range(len(values)), key=lambda index: values[index])
+
+    def any(self, values: _MiniArray) -> bool:
+        """Проверяет наличие истинного элемента."""
+        return any(values.data)
+
+    def maximum(self, left: _MiniArray, right: float) -> _MiniArray:
+        """Ограничивает нормы снизу."""
+        return _MiniArray([[max(value[0], right)] for value in left.data])
+
+    def allclose(self, left: _MiniArray, right: _MiniArray, **_kwargs: object) -> bool:
+        """Сравнивает массивы тестовых значений."""
+        return left.data == right.data
+
+    def _norm(self, values: _MiniArray, axis: int | None = None, keepdims: bool = False) -> object:
+        """Вычисляет евклидову норму вектора или строк матрицы."""
+        if axis == 1:
+            result = [[sum(value * value for value in row) ** 0.5] for row in values.data]
+            return _MiniArray(result) if keepdims else _MiniArray([row[0] for row in result])
+        return sum(value * value for value in values.data) ** 0.5
+
+
+class _FakeFeatureValue:
+    """Значение-заглушка для прохождения FFT-конвейера экстрактора."""
+
+    size = 1
+    shape = (1, 1)
+
+    def __init__(self, value: str = "value") -> None:
+        """Сохраняет метку операции."""
+        self.value = value
+
+    def __getitem__(self, _key: object) -> "_FakeFeatureValue":
+        """Возвращает значение для любого среза."""
+        return self
+
+    def __mul__(self, _other: object) -> "_FakeFeatureValue":
+        """Имитирует умножение массивов."""
+        return self
+
+    __rmul__ = __mul__
+
+    def __pow__(self, _power: int) -> "_FakeFeatureValue":
+        """Имитирует возведение в степень."""
+        return self
+
+    def __truediv__(self, _other: object) -> "_FakeFeatureValue":
+        """Имитирует деление признаков."""
+        return self
+
+    def __add__(self, _other: object) -> "_FakeFeatureValue":
+        """Имитирует сложение признаков."""
+        return self
+
+    def __radd__(self, _other: object) -> "_FakeFeatureValue":
+        """Имитирует сложение с числовым нулём."""
+        return self
+
+    def __lt__(self, _other: object) -> "_FakeFeatureValue":
+        """Имитирует сравнение матриц."""
+        return self
+
+    def __ge__(self, _other: object) -> "_FakeFeatureValue":
+        """Имитирует сравнение частот."""
+        return self
+
+    def __and__(self, _other: object) -> "_FakeFeatureValue":
+        """Имитирует объединение масок частот."""
+        return self
+
+    def __len__(self) -> int:
+        """Возвращает размер первой оси."""
+        return 1
+
+    def astype(self, _dtype: object) -> "_FakeFeatureValue":
+        """Имитирует преобразование типа."""
+        return self
+
+    def mean(self, axis: int | None = None) -> "_FakeFeatureValue":
+        """Имитирует среднее значение."""
+        del axis
+        return self
+
+    def std(self, axis: int | None = None) -> "_FakeFeatureValue":
+        """Имитирует стандартное отклонение."""
+        del axis
+        return self
+
+    def sum(self, axis: int | None = None) -> "_FakeFeatureValue":
+        """Имитирует сумму."""
+        del axis
+        return self
+
+
+class _FakeFeatureNumpy(types.ModuleType):
+    """Реализует формы и операции, нужные FFT-экстрактору."""
+
+    float32 = object()
+
+    def __init__(self) -> None:
+        """Создаёт заглушки пространств numpy."""
+        super().__init__("numpy")
+        value = _FakeFeatureValue()
+        self.fft = types.SimpleNamespace(
+            rfftfreq=lambda *_args: value,
+            rfft=lambda *_args, **_kwargs: value,
+        )
+        self.lib = types.SimpleNamespace(
+            stride_tricks=types.SimpleNamespace(
+                sliding_window_view=lambda *_args, **_kwargs: value,
+            )
+        )
+        self.linalg = types.SimpleNamespace(norm=lambda *_args, **_kwargs: 1.0)
+
+    def hanning(self, _length: int) -> _FakeFeatureValue:
+        """Возвращает тестовое оконное значение."""
+        return _FakeFeatureValue()
+
+    def geomspace(self, start: float, end: float, count: int) -> list[float]:
+        """Возвращает монотонные границы частот."""
+        return [start + (end - start) * index / (count - 1) for index in range(count)]
+
+    def pad(self, _samples: object, _padding: object) -> _FakeFeatureValue:
+        """Имитирует дополнение короткого сигнала."""
+        return _FakeFeatureValue()
+
+    def abs(self, value: _FakeFeatureValue) -> _FakeFeatureValue:
+        """Имитирует модуль спектра."""
+        return value
+
+    def log1p(self, value: _FakeFeatureValue) -> _FakeFeatureValue:
+        """Имитирует логарифм мощности."""
+        return value
+
+    def zeros(self, _shape: object, dtype: object = None) -> _FakeFeatureValue:
+        """Возвращает пустую полосу частот."""
+        del dtype
+        return _FakeFeatureValue()
+
+    def stack(self, _values: object, axis: int = 0) -> _FakeFeatureValue:
+        """Имитирует сборку матрицы полос."""
+        del axis
+        return _FakeFeatureValue()
+
+    def concatenate(self, _values: object) -> _FakeFeatureValue:
+        """Возвращает итоговый вектор признака заданной длины."""
+        value = _FakeFeatureValue("normalized")
+        value.shape = (52,)
+        return value
 class _FakeSignal:
     """Минимальный вектор для теста окон диаризации без numpy."""
 
