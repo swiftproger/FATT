@@ -51,6 +51,17 @@ tests/test_architecture.py архитектурные проверки прое�
 python -m unittest discover -s tests -v
 ```
 
+Для проверки покрытия и компиляции исходников установите инструменты разработки:
+
+```bash
+pip install -r requirements-dev.txt
+python -m coverage run --branch -m unittest discover -s tests -v
+python -m coverage report --include='fatt_core/*.py'
+python -m compileall -q fatt.py fatt_core tests
+```
+
+Те же проверки запускаются автоматически в GitHub Actions для Python 3.10–3.13.
+
 ## Установка на Mac с M4
 
 ### Шаг 1. Установите FFmpeg

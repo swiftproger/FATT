@@ -94,6 +94,20 @@ class TestArchitecture(unittest.TestCase):
         for package in ("torch", "numpy", "openai-whisper", "ffmpeg-python", "tqdm"):
             self.assertIn(package, requirements)
 
+    def test_development_manifest_contains_coverage_tool(self) -> None:
+        """Проверяет, что CI может запускать измерение покрытия кода."""
+        requirements = (PROJECT_ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
+        self.assertIn("coverage", requirements)
+
+    def test_ci_workflow_runs_tests_coverage_and_compilation(self) -> None:
+        """Проверяет обязательные этапы автоматической проверки проекта."""
+        workflow = (PROJECT_ROOT / ".github" / "workflows" / "tests.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("coverage run", workflow)
+        self.assertIn("coverage report", workflow)
+        self.assertIn("compileall", workflow)
+
     def test_every_production_class_and_function_has_docstring(self) -> None:
         """Проверяет наличие docstring у каждого класса и функции в рабочем коде."""
         source_files = [PROJECT_ROOT / "fatt.py", *sorted(CORE_ROOT.glob("*.py"))]

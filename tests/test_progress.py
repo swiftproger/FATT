@@ -83,15 +83,21 @@ class TestProgress(unittest.TestCase):
             ("write", "  [3/3] Транскрибация Whisper — начато"),
             bar.calls,
         )
+        self.assertTrue(
+            any(
+                call[0] == "postfix" and "работает" in str(call[1])
+                for call in bar.calls
+            )
+        )
         completion_calls = [
             call
             for call in bar.calls
             if call[0] == "postfix" and "готово за" in str(call[1])
         ]
         self.assertEqual(len(completion_calls), 1)
-        self.assertGreaterEqual(
+        self.assertEqual(
             len([call for call in bar.calls if call[0] == "update"]),
-            2,
+            1,
         )
 
     def test_progress_closes_unfinished_stage_as_stopped(self) -> None:
@@ -104,8 +110,8 @@ class TestProgress(unittest.TestCase):
         self.assertIn(("write", "  [2/3] Диаризация — остановлено"), bar.calls)
         self.assertIn(("postfix", "[2/3] Диаризация — остановлено"), bar.calls)
 
-    def test_activity_animation_handles_both_directions_and_zero_total(self) -> None:
-        """Проверяет разворот анимации у границ и нулевой progress bar."""
+    def test_activity_animation_updates_spinner_and_zero_total(self) -> None:
+        """Проверяет spinner длительного этапа и нулевой progress bar."""
         class StepEvent:
             """Имитирует событие, завершающее поток после одного шага."""
 
@@ -124,15 +130,11 @@ class TestProgress(unittest.TestCase):
             zero_progress.close()
 
             progress = ConsoleProgress("FATT")
-            progress._stage_floor = 0.0
-            progress._stage_limit = 0.99
-            progress._position = 0.98
-            progress._activity_direction = 1.0
+            progress._stage_label = "[3/3] Транскрибация Whisper"
             progress._animate_activity(StepEvent())
-            self.assertEqual(progress._activity_direction, -1.0)
-
-            progress._position = 0.01
-            progress._activity_direction = -1.0
-            progress._animate_activity(StepEvent())
-            self.assertEqual(progress._activity_direction, 1.0)
+            self.assertEqual(progress._animation_index, 1)
+            self.assertIn(
+                ("postfix", "[3/3] Транскрибация Whisper — ⠙ работает"),
+                progress._bar.calls,
+            )
             progress.close()

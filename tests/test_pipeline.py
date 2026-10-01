@@ -110,6 +110,43 @@ class TestProcessFile(unittest.TestCase):
             ],
         )
 
+    def test_process_file_integrates_transcript_alignment_and_real_output(self) -> None:
+        """Проверяет полный pipeline с реальным объединением и записью TXT."""
+        progress = FakeProgress()
+        transcriber = MagicMock()
+        transcriber.transcribe.return_value = [
+            {"start": 0.1, "end": 0.9, "text": " first "},
+            {"start": 1.1, "end": 1.9, "text": "second"},
+        ]
+        diarization = [
+            SpeakerSegment(0.0, 1.0, "LOCAL_00"),
+            SpeakerSegment(1.0, 2.0, "LOCAL_01"),
+        ]
+        with patch(
+            "fatt_core.pipeline.make_progress", return_value=progress
+        ):
+            with patch(
+                "fatt_core.pipeline.extract_audio",
+                return_value=self.root / "audio.wav",
+            ):
+                with patch(
+                    "fatt_core.pipeline.diarize_audio", return_value=diarization
+                ):
+                    report = pipeline.process_file(
+                        self.input_path,
+                        self.output_path,
+                        "small",
+                        "cpu",
+                        transcriber=transcriber,
+                    )
+        self.assertTrue(report.success)
+        self.assertEqual(report.word_count, 2)
+        self.assertEqual(
+            self.output_path.read_text(encoding="utf-8"),
+            "[00:00:00] Спикер 1: first\n"
+            "[00:00:01] Спикер 2: second\n",
+        )
+
     def test_process_file_constructs_transcriber_when_not_supplied(self) -> None:
         """Проверяет создание WhisperTranscriber внутри конвейера."""
         progress = FakeProgress()
