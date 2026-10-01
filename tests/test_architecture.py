@@ -36,6 +36,64 @@ class TestArchitecture(unittest.TestCase):
             f"Не хватает модулей: {sorted(expected_modules - actual_modules)}",
         )
 
+    def test_each_production_area_has_a_dedicated_test_module(self) -> None:
+        """Проверяет, что каждый слой проекта закреплён за тестовым модулем."""
+        required_tests = {
+            "cli": "test_cli.py",
+            "device": "test_device.py",
+            "diarization": "test_diarization.py",
+            "errors": "test_errors.py",
+            "media": "test_media.py",
+            "models": "test_output_report.py",
+            "output": "test_output_report.py",
+            "pipeline": "test_pipeline.py",
+            "progress": "test_progress.py",
+            "report": "test_output_report.py",
+            "transcription": "test_processing.py",
+        }
+        test_files = {path.name for path in (PROJECT_ROOT / "tests").glob("test_*.py")}
+        missing = {
+            module: test_file
+            for module, test_file in required_tests.items()
+            if test_file not in test_files
+        }
+        self.assertEqual(missing, {}, f"Для модулей нет тестов: {missing}")
+
+    def test_optional_runtime_dependencies_are_lazy_imported(self) -> None:
+        """Проверяет, что тяжёлые зависимости не загружаются при импорте пакета."""
+        optional_modules = {
+            "torch",
+            "numpy",
+            "ffmpeg",
+            "whisper",
+            "tqdm",
+            "prompt_toolkit",
+        }
+        violations: list[str] = []
+        for source_file in sorted(CORE_ROOT.glob("*.py")):
+            tree = ast.parse(source_file.read_text(encoding="utf-8"), str(source_file))
+            for node in tree.body:
+                imported_names: list[str] = []
+                if isinstance(node, ast.Import):
+                    imported_names = [alias.name.split(".")[0] for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    imported_names = [node.module.split(".")[0]]
+                for imported_name in imported_names:
+                    if imported_name in optional_modules:
+                        violations.append(f"{source_file.name}: {imported_name}")
+        self.assertEqual(
+            violations,
+            [],
+            "Опциональные зависимости должны импортироваться внутри функций: "
+            + ", ".join(violations),
+        )
+
+    def test_dependency_manifest_contains_runtime_packages(self) -> None:
+        """Проверяет наличие библиотек, требуемых основными слоями приложения."""
+        requirements = (PROJECT_ROOT / "requirements.txt").read_text(encoding="utf-8")
+        for package in ("torch", "numpy", "openai-whisper", "ffmpeg-python", "tqdm"):
+            self.assertIn(package, requirements)
+
     def test_every_production_class_and_function_has_docstring(self) -> None:
         """Проверяет наличие docstring у каждого класса и функции в рабочем коде."""
         source_files = [PROJECT_ROOT / "fatt.py", *sorted(CORE_ROOT.glob("*.py"))]

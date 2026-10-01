@@ -25,7 +25,7 @@ def _read_wav_samples(audio_path: Path) -> tuple[Any, int]:
             channels = wav_file.getnchannels()
             sample_width = wav_file.getsampwidth()
             frames = wav_file.readframes(wav_file.getnframes())
-    except (OSError, wave.Error) as exc:
+    except (EOFError, OSError, wave.Error) as exc:
         raise FattError(f"Не удалось прочитать временный WAV-файл: {exc}") from exc
 
     if sample_rate != 16000 or channels != 1 or sample_width != 2:
