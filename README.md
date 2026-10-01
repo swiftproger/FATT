@@ -1,5 +1,8 @@
 # FATT — FromAudioToText
 
+[![Tests](https://github.com/swiftproger/FATT/actions/workflows/tests.yml/badge.svg)](https://github.com/swiftproger/FATT/actions/workflows/tests.yml)
+[![Python](https://img.shields.io/badge/python-3.10%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
+
 Консольная утилита на Python для транскрибации аудио и видео с таймкодами и
 локальным распознаванием спикеров. FATT нормализует входной файл через FFmpeg,
 распознаёт речь моделью OpenAI Whisper, группирует акустические признаки
