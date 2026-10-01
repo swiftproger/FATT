@@ -116,6 +116,28 @@ class TestDiarizationMath(unittest.TestCase):
             self.assertEqual(diarization._cluster_features(features, 2), [0, 1, 1])
             self.assertEqual(diarization._cluster_features(features, None), [0, 1, 1])
 
+        with patch.dict(
+            sys.modules,
+            {"numpy": _FakeClusterNumpy(allclose_result=False)},
+        ):
+            self.assertEqual(
+                diarization._cluster_features([[1.0, 0.0], [0.0, 1.0]], 2),
+                [0, 1],
+            )
+            self.assertEqual(
+                diarization._cluster_features([[1.0, 0.0], [1.0, 0.0]], 3),
+                [0, 0],
+            )
+
+        one_hot = [
+            [1.0 if column == row else 0.0 for column in range(9)]
+            for row in range(9)
+        ]
+        with patch.dict(sys.modules, {"numpy": _FakeClusterNumpy()}):
+            labels = diarization._cluster_features(one_hot, None)
+        self.assertEqual(labels[:8], list(range(8)))
+        self.assertEqual(labels[8], 0)
+
     def test_smooth_labels_removes_only_isolated_spike(self) -> None:
         """Проверяет короткие последовательности и одиночный скачок метки."""
         self.assertEqual(diarization._smooth_labels([]), [])
@@ -143,6 +165,11 @@ class TestDiarizationMath(unittest.TestCase):
             feature = extractor.extract([0.0] * 100)
         self.assertEqual(feature.shape, (52,))
         self.assertEqual(feature.value, "normalized")
+
+        with patch.dict(sys.modules, {"numpy": _FakeFeatureNumpy(empty_bands=True)}):
+            extractor = diarization.AcousticFeatureExtractor(16000)
+            feature = extractor.extract([0.0] * 100)
+        self.assertEqual(feature.shape, (52,))
 
 
 class TestDiarizeAudio(unittest.TestCase):
@@ -352,9 +379,10 @@ class _FakeClusterNumpy(types.ModuleType):
     float32 = object()
     int = int
 
-    def __init__(self) -> None:
+    def __init__(self, *, allclose_result: bool = True) -> None:
         """Создаёт заглушку numpy."""
         super().__init__("numpy")
+        self.allclose_result = allclose_result
         self.linalg = types.SimpleNamespace(norm=self._norm)
 
     def asarray(self, values: object, dtype: object = None) -> _MiniArray:
@@ -396,7 +424,8 @@ class _FakeClusterNumpy(types.ModuleType):
 
     def allclose(self, left: _MiniArray, right: _MiniArray, **_kwargs: object) -> bool:
         """Сравнивает массивы тестовых значений."""
-        return left.data == right.data
+        del left, right
+        return self.allclose_result
 
     def _norm(self, values: _MiniArray, axis: int | None = None, keepdims: bool = False) -> object:
         """Вычисляет евклидову норму вектора или строк матрицы."""
@@ -409,12 +438,12 @@ class _FakeClusterNumpy(types.ModuleType):
 class _FakeFeatureValue:
     """Значение-заглушка для прохождения FFT-конвейера экстрактора."""
 
-    size = 1
     shape = (1, 1)
 
-    def __init__(self, value: str = "value") -> None:
+    def __init__(self, value: str = "value", *, size: int = 1) -> None:
         """Сохраняет метку операции."""
         self.value = value
+        self.size = size
 
     def __getitem__(self, _key: object) -> "_FakeFeatureValue":
         """Возвращает значение для любого среза."""
@@ -483,10 +512,10 @@ class _FakeFeatureNumpy(types.ModuleType):
 
     float32 = object()
 
-    def __init__(self) -> None:
+    def __init__(self, *, empty_bands: bool = False) -> None:
         """Создаёт заглушки пространств numpy."""
         super().__init__("numpy")
-        value = _FakeFeatureValue()
+        value = _FakeFeatureValue(size=0 if empty_bands else 1)
         self.fft = types.SimpleNamespace(
             rfftfreq=lambda *_args: value,
             rfft=lambda *_args, **_kwargs: value,

@@ -183,6 +183,11 @@ class TestJobDiscovery(unittest.TestCase):
             cli.discover_input_files(empty)
         with self.assertRaisesRegex(FattError, "Неподдерживаемый формат"):
             cli.discover_input_files(self.root / "team" / "notes.txt")
+        with patch.object(Path, "exists", return_value=True):
+            with patch.object(Path, "is_file", return_value=False):
+                with patch.object(Path, "is_dir", return_value=False):
+                    with self.assertRaisesRegex(FattError, "не является файлом или папкой"):
+                        cli.discover_input_files(self.root / "special")
 
     def test_build_jobs_for_file_supports_default_file_and_output_directory(self) -> None:
         """Проверяет результаты для файла при разных формах -o."""
@@ -330,6 +335,31 @@ class TestCliRun(unittest.TestCase):
         self.assertIn("Язык речи:         автоопределение (auto)", text)
         self.assertIn("Спикеры:           автоматически", text)
         self.assertIn("Результаты:        result.txt", text)
+
+    def test_print_run_configuration_uses_default_directory_for_source_folder(self) -> None:
+        """Проверяет имя папки результатов по умолчанию для пакетного источника."""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "recordings"
+            source.mkdir()
+            job = ProcessingJob(source / "call.wav", source / "call.txt")
+            stream = io.StringIO()
+            with redirect_stderr(stream):
+                cli._print_run_configuration(
+                    source=source,
+                    output=None,
+                    jobs=[job],
+                    model_name="small",
+                    language="xx",
+                    speakers=2,
+                    device_info=self._device(),
+                )
+        text = stream.getvalue()
+        self.assertIn(
+            f"Результаты:        {(source.parent / 'recordings_transcripts').resolve()}",
+            text,
+        )
+        self.assertIn("Язык речи:         xx (xx)", text)
+        self.assertIn("Спикеры:           2 (задано вручную)", text)
 
     def test_main_returns_codes_for_domain_error_interrupt_and_reports(self) -> None:
         """Проверяет коды main для ошибки, отмены и смешанного результата."""

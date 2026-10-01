@@ -125,6 +125,18 @@ class TestWhisperTranscriber(unittest.TestCase):
         self.assertEqual(result, [{"path": "audio.wav"}])
         factory.assert_called_once_with("base", "cpu", "en")
 
+    def test_transcription_does_not_emit_legacy_heartbeat(self) -> None:
+        """Проверяет, что длительная работа Whisper не печатает отдельный heartbeat."""
+        fake_model = types.SimpleNamespace(
+            transcribe=lambda _path, **_options: {"segments": []}
+        )
+        fake_whisper = types.SimpleNamespace(load_model=lambda *_args, **_kwargs: fake_model)
+        stream = StringIO()
+        with patch.dict(sys.modules, {"whisper": fake_whisper}):
+            with redirect_stderr(stream):
+                WhisperTranscriber("small", "cpu").transcribe(Path("audio.wav"))
+        self.assertNotIn("Whisper всё ещё работает", stream.getvalue())
+
 
 class TestSpeakerAlignment(unittest.TestCase):
     """Проверяет сопоставление сегментов Whisper и локальных спикеров."""

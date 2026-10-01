@@ -103,3 +103,36 @@ class TestProgress(unittest.TestCase):
         bar = FakeTqdm.instances[0]
         self.assertIn(("write", "  [2/3] Диаризация — остановлено"), bar.calls)
         self.assertIn(("postfix", "[2/3] Диаризация — остановлено"), bar.calls)
+
+    def test_activity_animation_handles_both_directions_and_zero_total(self) -> None:
+        """Проверяет разворот анимации у границ и нулевой progress bar."""
+        class StepEvent:
+            """Имитирует событие, завершающее поток после одного шага."""
+
+            def __init__(self) -> None:
+                """Создаёт счётчик ожиданий."""
+                self.calls = 0
+
+            def wait(self, _timeout: float) -> bool:
+                """Возвращает False один раз, затем True."""
+                self.calls += 1
+                return self.calls > 1
+
+        with patch.dict(sys.modules, {"tqdm": fake_tqdm_module()}):
+            zero_progress = ConsoleProgress("FATT", total=0)
+            zero_progress._start_activity()
+            zero_progress.close()
+
+            progress = ConsoleProgress("FATT")
+            progress._stage_floor = 0.0
+            progress._stage_limit = 0.99
+            progress._position = 0.98
+            progress._activity_direction = 1.0
+            progress._animate_activity(StepEvent())
+            self.assertEqual(progress._activity_direction, -1.0)
+
+            progress._position = 0.01
+            progress._activity_direction = -1.0
+            progress._animate_activity(StepEvent())
+            self.assertEqual(progress._activity_direction, 1.0)
+            progress.close()
