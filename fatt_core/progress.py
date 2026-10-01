@@ -3,50 +3,128 @@
 from __future__ import annotations
 
 import sys
+import threading
 import time
+
+from .errors import FattError
 
 
 class ConsoleProgress:
-    """Печатает этапы обработки отдельными строками без конфликтующих перерисовок."""
+    """Показывает tqdm-бар и статус текущего этапа обработки."""
 
     def __init__(self, description: str, total: int = 3) -> None:
-        """Создаёт последовательный индикатор обработки одного файла."""
-        del description
+        """Создаёт progress bar обработки одного файла."""
+        try:
+            from tqdm import tqdm
+        except ImportError as exc:
+            raise FattError(
+                "tqdm не установлен. Установите зависимости из README.md."
+            ) from exc
+
+        self._bar = tqdm(
+            total=total,
+            desc=description,
+            unit="этап",
+            dynamic_ncols=True,
+            file=sys.stderr,
+        )
         self._total = total
-        self._current = 0
+        self._position = 0.0
         self._stage_label: str | None = None
         self._stage_started_at: float | None = None
+        self._stage_floor = 0.0
+        self._stage_limit = 0.0
+        self._activity_direction = 1.0
+        self._activity_stop: threading.Event | None = None
+        self._activity_thread: threading.Thread | None = None
+        self._bar_lock = threading.Lock()
 
     def set_postfix_str(self, text: str) -> None:
-        """Печатает начало нового этапа обработки."""
+        """Показывает начало нового этапа и обновляет подпись progress bar."""
+        self._stop_activity()
         self._stage_label = text.strip()
         self._stage_started_at = time.perf_counter()
-        print(f"  {self._stage_label} — начато", file=sys.stderr, flush=True)
+        self._stage_floor = self._position
+        self._stage_limit = min(self._total - 0.01, self._stage_floor + 0.99)
+        self._activity_direction = 1.0
+        with self._bar_lock:
+            self._bar.write(f"  {self._stage_label} — начато")
+            self._bar.set_postfix_str(f"{self._stage_label} — начато")
+        self._start_activity()
 
     def update(self, amount: int = 1) -> None:
-        """Печатает завершение текущего этапа и обновляет его номер."""
+        """Обновляет progress bar и показывает длительность этапа."""
+        self._stop_activity()
         elapsed = 0.0
         if self._stage_started_at is not None:
             elapsed = time.perf_counter() - self._stage_started_at
         label = self._stage_label or "Этап обработки"
-        self._current = min(self._total, self._current + amount)
-        print(
-            f"  {label} — готово за {_format_seconds(elapsed)} "
-            f"({self._current}/{self._total})",
-            file=sys.stderr,
-            flush=True,
-        )
+        target = min(self._total, self._stage_floor + amount)
+        with self._bar_lock:
+            self._bar.set_postfix_str(
+                f"{label} — готово за {_format_seconds(elapsed)}"
+            )
+            self._bar.update(target - self._position)
+        self._position = target
+        self._stage_floor = target
+        self._stage_limit = target
         self._stage_label = None
         self._stage_started_at = None
 
     def close(self) -> None:
-        """Завершает индикатор без управляющих символов в терминале."""
+        """Закрывает progress bar, не оставляя незавершённый этап без статуса."""
+        self._stop_activity()
         if self._stage_label is not None:
-            print(
-                f"  {self._stage_label} — остановлено",
-                file=sys.stderr,
-                flush=True,
-            )
+            with self._bar_lock:
+                self._bar.write(f"  {self._stage_label} — остановлено")
+                self._bar.set_postfix_str(f"{self._stage_label} — остановлено")
+        self._bar.close()
+
+    def _start_activity(self) -> None:
+        """Запускает плавное движение progress bar внутри текущего этапа."""
+        if self._stage_limit <= self._stage_floor:
+            return
+        stop_event = threading.Event()
+        self._activity_stop = stop_event
+        self._activity_thread = threading.Thread(
+            target=self._animate_activity,
+            args=(stop_event,),
+            name="fatt-progress",
+            daemon=True,
+        )
+        self._activity_thread.start()
+
+    def _stop_activity(self) -> None:
+        """Останавливает поток анимации перед сменой состояния progress bar."""
+        stop_event = self._activity_stop
+        activity_thread = self._activity_thread
+        if stop_event is not None:
+            stop_event.set()
+        if activity_thread is not None:
+            activity_thread.join()
+        self._activity_stop = None
+        self._activity_thread = None
+
+    def _animate_activity(self, stop_event: threading.Event) -> None:
+        """Двигает индикатор вперёд и назад, пока этап ещё выполняется."""
+        while not stop_event.wait(0.2):
+            with self._bar_lock:
+                if self._activity_direction > 0:
+                    next_position = min(
+                        self._stage_limit,
+                        self._position + 0.02,
+                    )
+                    if next_position >= self._stage_limit:
+                        self._activity_direction = -1.0
+                else:
+                    next_position = max(
+                        self._stage_floor,
+                        self._position - 0.02,
+                    )
+                    if next_position <= self._stage_floor:
+                        self._activity_direction = 1.0
+                self._bar.update(next_position - self._position)
+                self._position = next_position
 
 
 def _format_seconds(seconds: float) -> str:
@@ -58,5 +136,5 @@ def _format_seconds(seconds: float) -> str:
 
 
 def make_progress(description: str = "FATT") -> ConsoleProgress:
-    """Создаёт читаемый текстовый индикатор трёх этапов одного файла."""
+    """Создаёт tqdm-индикатор трёх этапов одного файла."""
     return ConsoleProgress(description)
