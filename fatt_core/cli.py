@@ -12,6 +12,7 @@ from .console import color
 from .device import DeviceInfo, get_device_info
 from .errors import FattError
 from .media import SUPPORTED_EXTENSIONS, check_ffmpeg, validate_input
+from .journal import TaskJournal
 from .models import ProcessingJob, ProcessingReport
 from .pipeline import process_file
 from .report import print_report
@@ -81,6 +82,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--language",
         help="язык речи, например ru или en; ускоряет и улучшает распознавание",
+    )
+    recovery = parser.add_mutually_exclusive_group()
+    recovery.add_argument(
+        "--resume", action="store_true",
+        help="продолжить задачу папки без вопроса, пропуская готовые файлы",
+    )
+    recovery.add_argument(
+        "--restart", action="store_true",
+        help="обработать папку заново, сбросив сохранённое состояние задачи",
     )
     return parser
 
@@ -229,9 +239,16 @@ def build_jobs(
         raise FattError("Папка результатов не должна совпадать с папкой источника")
     _ensure_directory(output_root)
     jobs = []
+    result_paths: set[Path] = set()
     for input_path in input_files:
         relative_path = input_path.relative_to(source)
         output_path = (output_root / relative_path).with_suffix(".txt")
+        if output_path in result_paths:
+            raise FattError(
+                f"Несколько исходников имеют один путь результата: {output_path}. "
+                "Переименуйте файлы с одинаковым именем и разными расширениями."
+            )
+        result_paths.add(output_path)
         _ensure_directory(output_path.parent)
         jobs.append(ProcessingJob(input_path, output_path))
     return jobs
@@ -299,6 +316,67 @@ def run(args: argparse.Namespace, interactive: bool = False) -> list[ProcessingR
         )
         interactive = True
     jobs = build_jobs(source, output, interactive=interactive)
+    if source.expanduser().resolve().is_dir():
+        settings = {"model": model_name, "language": language, "speakers": args.speakers}
+        with TaskJournal(
+            source, _output_directory(source, output), jobs, settings,
+            restart=getattr(args, "restart", False),
+        ) as journal:
+            _prepare_journal(journal, resume=getattr(args, "resume", False))
+            return _run_jobs(args, source, output, jobs, model_name, language, journal)
+    return _run_jobs(args, source, output, jobs, model_name, language)
+
+
+def _prepare_journal(journal: TaskJournal, resume: bool) -> None:
+    """Предлагает продолжить найденную задачу и сохраняет подтверждённый план."""
+    print(color(f"Журнал задачи: {journal.path}", "path", sys.stderr), file=sys.stderr)
+    restart = journal.restart
+    if not journal.compatible:
+        if resume:
+            raise FattError("Параметры задачи изменились. Для обработки заново укажите --restart.")
+        choice = _read_choice(
+            "Параметры отличаются от сохранённой задачи",
+            ("заново", "отмена"), "отмена",
+        )
+        if choice == "отмена":
+            raise KeyboardInterrupt
+        restart = True
+    journal.plan(restart=restart)
+    pending = len(journal.jobs) - len(journal.cached)
+    if journal.existing and not restart and pending:
+        print(color(
+            f"Найдена незавершённая задача: готово {len(journal.cached)} "
+            f"из {len(journal.jobs)}, осталось {pending}.", "warning", sys.stderr,
+        ), file=sys.stderr)
+        if not resume:
+            choice = _read_choice(
+                "Продолжить обработку", ("продолжить", "заново", "отмена"), "продолжить",
+            )
+            if choice == "отмена":
+                raise KeyboardInterrupt
+            if choice == "заново":
+                journal.plan(restart=True)
+    if len(journal.cached) == len(journal.jobs):
+        print(color(
+            "Задача уже завершена. Все результаты проверены; повторная обработка не требуется. "
+            "Для нового запуска используйте --restart.", "success", sys.stderr,
+        ), file=sys.stderr)
+        journal.finish()
+    else:
+        journal.begin()
+
+
+def _run_jobs(
+    args: argparse.Namespace, source: Path, output: Path | None,
+    jobs: list[ProcessingJob], model_name: str, language: str | None,
+    journal: TaskJournal | None = None,
+) -> list[ProcessingReport]:
+    """Обрабатывает оставшиеся файлы, повторно используя сохранённые результаты."""
+    started_at = time.perf_counter()
+    if journal is not None and len(journal.cached) == len(jobs):
+        reports = [journal.cached[job.input_path] for job in jobs]
+        print_report(reports, time.perf_counter() - started_at)
+        return reports
     check_ffmpeg()
     device_info = get_device_info()
     device = device_info.name
@@ -326,8 +404,16 @@ def run(args: argparse.Namespace, interactive: bool = False) -> list[ProcessingR
         flush=True,
     )
     reports: list[ProcessingReport] = []
-    started_at = time.perf_counter()
     for index, job in enumerate(jobs, start=1):
+        if journal is not None and job.input_path in journal.cached:
+            reports.append(journal.cached[job.input_path])
+            print(color(
+                f"Пропущен готовый файл {index} из {len(jobs)}: {job.input_path}",
+                "muted", sys.stderr,
+            ), file=sys.stderr)
+            continue
+        if journal is not None:
+            journal.start_file(job)
         print(
             color(f"\nОбработка файла {index} из {len(jobs)}: {job.input_path}", "heading", sys.stderr),
             file=sys.stderr,
@@ -344,12 +430,16 @@ def run(args: argparse.Namespace, interactive: bool = False) -> list[ProcessingR
                 language=language,
             )
         )
+        if journal is not None:
+            reports[-1] = journal.record(job, reports[-1])
         report = reports[-1]
         if report.success:
             print(color(f"  Готово: {report.output_path}", "success", sys.stderr), file=sys.stderr)
         else:
             print(color(f"  Ошибка: {report.error}", "error", sys.stderr), file=sys.stderr)
         print("", file=sys.stderr)
+    if journal is not None:
+        journal.finish()
     print_report(reports, time.perf_counter() - started_at)
     return reports
 
