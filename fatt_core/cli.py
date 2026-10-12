@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from typing import Sequence
 
+from .console import color
 from .device import DeviceInfo, get_device_info
 from .errors import FattError
 from .media import SUPPORTED_EXTENSIONS, check_ffmpeg, validate_input
@@ -124,7 +125,7 @@ def _read_choice(prompt: str, choices: Sequence[str], default: str) -> str:
     numbered_choices = ", ".join(
         f"{index + 1}) {choice}" for index, choice in enumerate(choices)
     )
-    print(f"{prompt}: {numbered_choices}")
+    print(color(f"{prompt}: {numbered_choices}", "heading"))
     while True:
         value = _prompt_text(f"Выбор [{default}]: ").lower()
         if not value:
@@ -133,7 +134,7 @@ def _read_choice(prompt: str, choices: Sequence[str], default: str) -> str:
             return choices[int(value) - 1]
         if value in choices:
             return value
-        print("Введите номер или одно из значений: " + ", ".join(choices))
+        print(color("Введите номер или одно из значений: " + ", ".join(choices), "warning"))
 
 
 def interactive_wizard(
@@ -142,7 +143,7 @@ def interactive_wizard(
     default_language: str = DEFAULT_LANGUAGE,
 ) -> tuple[Path, Path, str, str | None]:
     """Проводит мастер выбора модели, языка, источника и папки результатов."""
-    print("FATT — мастер запуска")
+    print(color("FATT — мастер запуска", "heading"))
     model = _read_choice("1. Модель Whisper", MODEL_CHOICES, default_model)
     language = _read_choice(
         "2. Язык речи", LANGUAGE_CHOICES, default_language
@@ -258,9 +259,9 @@ def _print_run_configuration(
         if speakers is not None
         else "автоматически"
     )
-    print("\nПАРАМЕТРЫ ЗАПУСКА", file=sys.stderr)
-    print("  Вход:              " + str(source), file=sys.stderr)
-    print("  Результаты:        " + str(output_label), file=sys.stderr)
+    print(color("\nПАРАМЕТРЫ ЗАПУСКА", "heading", sys.stderr), file=sys.stderr)
+    print(color("  Вход:              " + str(source), "path", sys.stderr), file=sys.stderr)
+    print(color("  Результаты:        " + str(output_label), "path", sys.stderr), file=sys.stderr)
     print(f"  Файлов:            {len(jobs)}", file=sys.stderr)
     print(
         f"  Модель Whisper:    {model_name} — {model_description}",
@@ -311,14 +312,16 @@ def run(args: argparse.Namespace, interactive: bool = False) -> list[ProcessingR
         device_info=device_info,
     )
     print(
-        f"Загрузка модели Whisper '{model_name}' на устройстве "
-        f"'{device_info.label}'...",
+        color(
+            f"Загрузка модели Whisper '{model_name}' на устройстве "
+            f"'{device_info.label}'...", "active", sys.stderr,
+        ),
         file=sys.stderr,
         flush=True,
     )
     transcriber = WhisperTranscriber(model_name, device, language)
     print(
-        "Модель Whisper загружена. Начинаю обработку файлов.",
+        color("Модель Whisper загружена. Начинаю обработку файлов.", "success", sys.stderr),
         file=sys.stderr,
         flush=True,
     )
@@ -326,7 +329,7 @@ def run(args: argparse.Namespace, interactive: bool = False) -> list[ProcessingR
     started_at = time.perf_counter()
     for index, job in enumerate(jobs, start=1):
         print(
-            f"\nОбработка файла {index} из {len(jobs)}: {job.input_path}",
+            color(f"\nОбработка файла {index} из {len(jobs)}: {job.input_path}", "heading", sys.stderr),
             file=sys.stderr,
         )
         reports.append(
@@ -341,6 +344,11 @@ def run(args: argparse.Namespace, interactive: bool = False) -> list[ProcessingR
                 language=language,
             )
         )
+        report = reports[-1]
+        if report.success:
+            print(color(f"  Готово: {report.output_path}", "success", sys.stderr), file=sys.stderr)
+        else:
+            print(color(f"  Ошибка: {report.error}", "error", sys.stderr), file=sys.stderr)
         print("", file=sys.stderr)
     print_report(reports, time.perf_counter() - started_at)
     return reports
@@ -354,9 +362,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         reports = run(args, interactive=args.input is None)
     except FattError as exc:
-        print(f"Ошибка: {exc}", file=sys.stderr)
+        print(color(f"Ошибка: {exc}", "error", sys.stderr), file=sys.stderr)
         return 1
     except KeyboardInterrupt:
-        print("\nОбработка прервана пользователем.", file=sys.stderr)
+        print(color("\nОбработка прервана пользователем.", "warning", sys.stderr), file=sys.stderr)
         return 130
     return 0 if all(report.success for report in reports) else 1

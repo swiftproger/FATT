@@ -7,6 +7,7 @@ import threading
 import time
 
 from .errors import FattError
+from .console import color, supports_color
 
 
 class ConsoleProgress:
@@ -23,7 +24,8 @@ class ConsoleProgress:
 
         self._bar = tqdm(
             total=total,
-            desc=description,
+            desc=color(description, "heading", sys.stderr),
+            colour="cyan" if supports_color(sys.stderr) else None,
             unit="этап",
             dynamic_ncols=True,
             file=sys.stderr,
@@ -46,8 +48,8 @@ class ConsoleProgress:
         self._stage_floor = self._position
         self._animation_index = 0
         with self._bar_lock:
-            self._bar.write(f"  {self._stage_label} — начато")
-            self._bar.set_postfix_str(f"{self._stage_label} — начато")
+            self._bar.write(color(f"  {self._stage_label} — начато", "active", sys.stderr), file=sys.stderr)
+            self._bar.set_postfix_str(color(f"{self._stage_label} — начато", "active", sys.stderr))
         self._start_activity()
 
     def update(self, amount: int = 1) -> None:
@@ -60,7 +62,7 @@ class ConsoleProgress:
         target = min(self._total, self._stage_floor + amount)
         with self._bar_lock:
             self._bar.set_postfix_str(
-                f"{label} — готово за {_format_seconds(elapsed)}"
+                color(f"{label} — готово за {_format_seconds(elapsed)}", "success", sys.stderr)
             )
             self._bar.update(target - self._position)
         self._position = target
@@ -74,8 +76,8 @@ class ConsoleProgress:
         self._stop_activity()
         if self._stage_label is not None:
             with self._bar_lock:
-                self._bar.write(f"  {self._stage_label} — остановлено")
-                self._bar.set_postfix_str(f"{self._stage_label} — остановлено")
+                self._bar.write(color(f"  {self._stage_label} — остановлено", "warning", sys.stderr), file=sys.stderr)
+                self._bar.set_postfix_str(color(f"{self._stage_label} — остановлено", "warning", sys.stderr))
         self._bar.close()
 
     def _start_activity(self) -> None:
@@ -111,7 +113,7 @@ class ConsoleProgress:
                 self._animation_index = (self._animation_index + 1) % len(spinner)
                 label = self._stage_label or "Этап обработки"
                 self._bar.set_postfix_str(
-                    f"{label} — {spinner[self._animation_index]} работает"
+                    color(f"{label} — {spinner[self._animation_index]} работает", "active", sys.stderr)
                 )
 
 

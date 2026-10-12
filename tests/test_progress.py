@@ -25,7 +25,7 @@ class FakeTqdm:
         self.closed = False
         type(self).instances.append(self)
 
-    def write(self, text: str) -> None:
+    def write(self, text: str, **options: object) -> None:
         """Запоминает строку, которую tqdm пишет над полосой."""
         self.calls.append(("write", text))
 
