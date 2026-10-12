@@ -175,10 +175,18 @@ python fatt.py
 1. модель Whisper: `tiny`, `base`, `small`, `medium`, `large-v3`;
 2. язык речи: `ru`, `en` или `auto`;
 3. путь к аудио-/видеофайлу или папке;
-4. путь к папке для сохранения текстовых результатов.
+4. базовую папку для сохранения текстовых результатов (Enter — папка исходного
+   файла или выбранная исходная папка).
 
 Значения по умолчанию — модель `small` и язык `ru`: достаточно нажимать Enter.
 Вариант можно выбрать номером или ввести его название.
+
+Результаты сохраняются в автоматически создаваемой подпапке `transcripts`:
+например, для `/records/meeting.mp4` по умолчанию —
+`/records/transcripts/meeting.txt`. Если выбрать `/results`, текст окажется в
+`/results/transcripts/meeting.txt`. Это правило действует и для `-o` с папкой;
+для одного файла можно явно задать имя результата через `-o result.txt` или
+`-o result.md`.
 
 Если указана папка, FATT рекурсивно найдёт подходящие файлы на любой глубине.
 Для каждого файла будет создан отдельный `.txt` с тем же именем, а относительная
@@ -231,17 +239,18 @@ python fatt.py -i meeting.m4a --language ru -o meeting.md
 Обработка папки с сохранением структуры:
 
 ```bash
-python fatt.py -i recordings/ -o transcripts/
+python fatt.py -i recordings/ -o results/
 ```
 
 Например, файл `recordings/team/april/call.mp4` будет сохранён как
-`transcripts/team/april/call.txt`.
+`results/transcripts/team/april/call.txt`. Без `-o` —
+`recordings/transcripts/team/april/call.txt`.
 
 Параметры командной строки:
 
 ```text
 -i, --input      файл или папка; если не указан, запускается интерактивный мастер
--o, --output     файл результата или папка для пакетной обработки
+-o, --output     файл результата или базовая папка для подпапки transcripts
 -m, --model      tiny, base, small, medium или large-v3; по умолчанию small
 --speakers       количество спикеров, если известно
 --language       язык речи, например ru или en

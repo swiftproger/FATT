@@ -131,6 +131,21 @@ class TestInteractiveWizard(unittest.TestCase):
         self.assertEqual(source, Path("/tmp/source dir"))
         self.assertEqual(output, Path("~/results").expanduser())
 
+    def test_wizard_accepts_empty_output_for_file_and_directory(self) -> None:
+        """Enter выбирает папку файла или саму исходную папку."""
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve()
+            media = base / "meeting.wav"
+            media.write_bytes(b"audio")
+            for source_path in (media, base):
+                with self.subTest(source=source_path):
+                    with patch("fatt_core.cli._prompt_text", side_effect=["", "", str(source_path), ""]) as prompt:
+                        source, output, _, _ = cli.interactive_wizard()
+                    self.assertEqual(output, base)
+                    self.assertIn(str(base), prompt.call_args.args[0])
+                    jobs = cli.build_jobs(source, output, interactive=True)
+                    self.assertEqual(jobs[0].output_path, base / "transcripts" / "meeting.txt")
+
     def test_wizard_uses_supplied_output_without_reading_it(self) -> None:
         """Проверяет режим мастера с заранее заданной папкой результатов."""
         answers = iter(["1", "2", "/tmp/source"])
@@ -193,14 +208,14 @@ class TestJobDiscovery(unittest.TestCase):
         """Проверяет результаты для файла при разных формах -o."""
         source = self.root / "meeting.wav"
         default_job = cli.build_jobs(source, None)[0]
-        self.assertEqual(default_job.output_path, source.with_suffix(".txt").resolve())
+        self.assertEqual(default_job.output_path, (source.parent / "transcripts" / "meeting.txt").resolve())
 
         explicit = self.root / "result.md"
         self.assertEqual(cli.build_jobs(source, explicit)[0].output_path, explicit)
 
         output_dir = self.root / "results"
         job = cli.build_jobs(source, output_dir)[0]
-        self.assertEqual(job.output_path, (output_dir / "meeting.txt").resolve())
+        self.assertEqual(job.output_path, (output_dir / "transcripts" / "meeting.txt").resolve())
         self.assertTrue(output_dir.is_dir())
 
     def test_build_jobs_for_directory_preserves_relative_structure(self) -> None:
@@ -210,22 +225,27 @@ class TestJobDiscovery(unittest.TestCase):
         self.assertEqual(
             [job.output_path for job in jobs],
             [
-                (output / "meeting.txt").resolve(),
-                (output / "team" / "April" / "call.txt").resolve(),
+                (output / "transcripts" / "meeting.txt").resolve(),
+                (output / "transcripts" / "team" / "April" / "call.txt").resolve(),
             ],
         )
-        self.assertTrue((output / "team" / "April").is_dir())
+        self.assertTrue((output / "transcripts" / "team" / "April").is_dir())
 
         default_jobs = cli.build_jobs(self.root, None)
-        self.assertTrue(default_jobs[0].output_path.parent.name.endswith("_transcripts"))
+        self.assertEqual(default_jobs[0].output_path.parent, (self.root / "transcripts").resolve())
 
     def test_build_jobs_rejects_result_collisions(self) -> None:
         """Проверяет запрет перезаписи входного файла или папки источника."""
         source_file = self.root / "meeting.wav"
         with self.assertRaisesRegex(FattError, "совпадать с входным файлом"):
             cli.build_jobs(source_file, source_file, interactive=True)
+        jobs = cli.build_jobs(self.root, self.root)
+        self.assertEqual(jobs[0].output_path.parent, (self.root / "transcripts").resolve())
+
+        nested = self.root / "transcripts"
+        (nested / "call.wav").write_bytes(b"audio")
         with self.assertRaisesRegex(FattError, "совпадать с папкой источника"):
-            cli.build_jobs(self.root, self.root)
+            cli.build_jobs(nested, self.root)
 
     def test_ensure_directory_wraps_filesystem_error(self) -> None:
         """Проверяет преобразование ошибки создания папки в FattError."""
@@ -238,7 +258,7 @@ class TestJobDiscovery(unittest.TestCase):
         source = self.root / "meeting.wav"
         output = self.root / "results.txt"
         job = cli.build_jobs(source, output, interactive=True)[0]
-        self.assertEqual(job.output_path, (output / "meeting.txt").resolve())
+        self.assertEqual(job.output_path, (output / "transcripts" / "meeting.txt").resolve())
 
 
 class TestCliRun(unittest.TestCase):
@@ -355,7 +375,7 @@ class TestCliRun(unittest.TestCase):
                 )
         text = stream.getvalue()
         self.assertIn(
-            f"Результаты:        {(source.parent / 'recordings_transcripts').resolve()}",
+            f"Результаты:        {(source / 'transcripts').resolve()}",
             text,
         )
         self.assertIn("Язык речи:         xx (xx)", text)

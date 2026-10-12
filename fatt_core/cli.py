@@ -63,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
         "-o",
         "--output",
         type=Path,
-        help="путь к файлу или папке результатов",
+        help="файл результата или папка, внутри которой создаётся transcripts",
     )
     parser.add_argument(
         "-m",
@@ -150,11 +150,28 @@ def interactive_wizard(
     print("Укажите аудиофайл, видеофайл или папку с ними.")
     source = _read_path("3. Файл или папка: ")
     if default_output is None:
-        output = _read_path("4. Папка для сохранения результатов: ")
+        base = _default_output_base(source)
+        value = _prompt_text(
+            f"4. Папка для сохранения результатов [{base}] "
+            "(будет создана подпапка transcripts или укажите свою): "
+        )
+        output = parse_user_path(value) if value else base
     else:
         output = default_output
-        print(f"4. Папка для сохранения результатов: {output}")
+        print(f"4. Папка для сохранения результатов: {output / 'transcripts'}")
     return source, output, model, None if language == "auto" else language
+
+
+def _default_output_base(source: Path) -> Path:
+    """Выбирает исходную папку или папку, содержащую исходный файл."""
+    source = source.expanduser().resolve()
+    return source if source.is_dir() else source.parent
+
+
+def _output_directory(source: Path, output: Path | None) -> Path:
+    """Возвращает подпапку транскрибации внутри выбранной базовой папки."""
+    base = output.expanduser().resolve() if output is not None else _default_output_base(source)
+    return base / "transcripts"
 
 
 def discover_input_files(source: Path) -> list[Path]:
@@ -195,23 +212,18 @@ def build_jobs(
     if source.is_file():
         input_path = input_files[0]
         if output is None:
-            output_path = input_path.with_suffix(".txt")
+            output_path = _output_directory(source, output) / f"{input_path.stem}.txt"
         elif interactive or output.suffix.lower() not in {".txt", ".md"}:
-            output_root = output.expanduser().resolve()
-            if output_root == input_path:
+            if output.expanduser().resolve() == input_path:
                 raise FattError("Папка результатов не должна совпадать с входным файлом")
-            _ensure_directory(output_root)
+            output_root = _output_directory(source, output)
             output_path = output_root / f"{input_path.stem}.txt"
         else:
             output_path = output
         _ensure_directory(output_path.parent)
         return [ProcessingJob(input_path, output_path)]
 
-    output_root = (
-        output.expanduser().resolve()
-        if output is not None
-        else source.parent / f"{source.name}_transcripts"
-    )
+    output_root = _output_directory(source, output)
     if output_root == source:
         raise FattError("Папка результатов не должна совпадать с папкой источника")
     _ensure_directory(output_root)
@@ -237,14 +249,10 @@ def _print_run_configuration(
     language_key = language or "auto"
     language_label = LANGUAGE_LABELS.get(language_key, language_key)
     model_description = MODEL_DESCRIPTIONS.get(model_name, "пользовательская модель")
-    if output is None:
-        source_path = source.expanduser().resolve()
-        if source_path.is_dir():
-            output_label = source_path.parent / f"{source_path.name}_transcripts"
-        else:
-            output_label = jobs[0].output_path
+    if source.expanduser().resolve().is_dir():
+        output_label = _output_directory(source, output)
     else:
-        output_label = output
+        output_label = jobs[0].output_path
     speaker_label = (
         f"{speakers} (задано вручную)"
         if speakers is not None
